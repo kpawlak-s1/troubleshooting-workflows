@@ -1,0 +1,155 @@
+Ingestion of syslog can be a challenging situation to troubleshoot. Laying some groundwork, this troubleshooting workflow assumes that 
+you have been following the setup instructions here: https://community.sentinelone.com/s/article/000008665
+
+which involves setting up the SentinelOne collector using docker. 
+
+I'll start with zero other assumptions - you did your best to follow this guide but *something* is not working. I have no idea where things went wrong
+so we are just going to go step by step
+
+
+1. let's make sure docker is installed. run the command
+
+docker -v
+
+2. make sure docker compose is installed
+
+docker compose version
+
+3. let's verify you have a valid syslog.yaml file
+
+navigate to the directory from which you intend to run the collector docker images.
+
+run the ls command and verify the syslog.yaml file exists and looks like the example file in the docs: https://community.sentinelone.com/s/article/000008665
+
+if it does not, create/update it to make sure it is
+
+4. verify you have a key and docker compose
+
+from the ls command previously run (or re-run it), in the same directory you should also ahve
+
+syslog.crt
+syslog.key
+docker-compose.yml
+
+if you do not, then you need to rerun the commands
+
+openssl req -x509 -nodes -newkey rsa:4096 -keyout syslog.key -out syslog.crt -subj '/CN=<host>' -days 3650
+
+curl -o docker-compose.yml https://app.scalyr.com/scalyr-repo/stable/latest/syslog-collector/docker-compose-latest.yml
+
+5. ok, if everything is looking good so far, let's verify that your docker containers are running.
+
+run the command "docker ps"
+
+you should see 3 running docker containers:
+
+scalyr/scalyr-agent-docker-json      this container runs the actual s1 collector agent (previously known as the scalyr agent). This container retrieves logs from the disk and ships them to the S1 cloud
+scalyr/syslog-collector-syslog       this container runs the syslog-ng service. it monitors ports for incoming syslog traffic (based on the configurations in syslog.yaml) and writes them to disk for the S1 collector agent to grab
+scalyr/syslog-collector-config-generator       this container reads your syslog.yaml file and uses it to create the appropriate configurations for syslog.ng and s1 collector to run
+
+if these 3 containers are not running, then you need to run
+
+docker-compose up
+
+in the same directory as the previously mentioned config files
+
+then run "docker ps" again to verify all 3 are running
+
+if not, then honestly just stop any running containers, create a new directory, and start from the beginning
+
+
+
+Ok, now at this point your containers should be running, but you're still not getting the logs in the S1 console coming from your syslog stream so we need to narrow that down.
+
+let's start by verifying that the S1 Collector docker container is able to connect to the S1 console. one easy way to do so is to just check if the s1 console has logs from it
+
+run "docker ps" and grab the alphanumric container ID of the "scalyr-agent-docker-json" container
+
+In my case, this was "f20c078493a6"
+
+log into the s1 UI and search for logs from this container. The container ID will be registered as the serverHost, so my query is
+
+serverHost='f20c078493a6'
+
+If you see results, then your collector is successfully connected to the S1 console and shipping logs. The problem does not lie between the S1 collector container and the S1 console.
+If you do not see results, then we need to troubleshoot why this is happening
+
+the best way to do so is to look at the logs and status of the S1 collector, which we can do from the docker container. Jump into the container using docker exec. remember the alpahnumeric below is the id of my container. replace it with yours
+
+docker exec -it f20c078493a6 /bin/bash
+
+and quickly just check the agent status using
+
+scalyr-agent-2 status -v
+
+What are some things we could look for:
+
+1. the syslog.yaml file you create gets parsed and a subset of it is used to create the config file for the s1 collector agent, which is stored at 
+
+/etc/scalyr-agent-2/agent.json
+
+First skim the results to see if the agent config status field shows that the file was parsed successfully. you're looking for something like the below
+
+Configuration file:    /etc/scalyr-agent-2/agent.json
+Status:                Good (files parsed successfully)
+
+
+2. if that looks good, let's see if the scalyr agent API key looks good. If there is a problem with the API key you will see something like this in the scalyr agent status
+
+  Last copy response status:                 client/connectionClosed
+
+This is not a smoking gun necessarily, but it does
+
+the agent log file is stored at /var/log/scalyr-agent-2/agent.log 
+and the log file for the agent workers is at /var/log/scalyr-agent-2/agent-worker-session-default-xxxxx.log
+
+xxxxx may very (0,1,2, etc) depending on how long your agent has been running
+
+anyways, i recommend cracking open the worker session log file and looking at those logs. when i intentionally provided an incorrect API key (one char short) I got this error message:
+
+[error="error/client/badParam"] Request to 'https://xdr.us1.sentinelone.net' failed due to a bad parameter value.  This may be caused by an invalid write logs api key in the configuration. Response message: Couldn't decode API token ...Jk0I/.
+
+and when i fed an API key that was the right length but had an incorrect character, I got
+
+[error="error/client/badParam"] Request to 'https://xdr.us1.sentinelone.net' failed due to a bad parameter value.  This may be caused by an invalid write logs api key in the configuration. Response message: authorization token [...Jk0I/] is invalid
+
+If you don't see messages like this, your API key is probably fine. If you do, then create a new Log Write key and place it in the syslog.yaml file on the host OS
+
+if you STILL don't have logs from your agent at all, it is time to start looking at network issue most likely!
+
+use curl to connect to the s1 console:
+
+curl -k https://xdr.us1.sentinelone.net
+
+
+if this fails, try to see if DNS is working:
+
+nslookup xdr.us1.sentinelone.com
+
+If its not DNS, then could be a connection issue of the HTTPS protocol. This could be that the outbound connection from the scalyr agent docker container is not able to connect to S1 via HTTPS. Check outbound traffic logs if avaiable to see if connections are coming off the host
+
+if they are not, then it could be that your host OS is blocking the connection. If not, check you edge firewall / other intermediaries to see if traffic is coming out.
+
+At this point we have gone through all the common scenarios for why you may not be getting logs from the agent at all. I would recommend 
+
+1. trying to just rebuild from scratch
+2. opening a ticket with support
+
+IF YOU ARE GETTING LOGS FROM THE AGENT BUT NOT FROM YOUR SYSLOG SOURCE
+
+Now its time to zero in on this. If you've followed the steps above we know your s1 collector and syslog-ng containers are running. The most likely issue is a port mismatch.
+
+Check you syslog.yaml config
+
+1. is the port number that it is listening from the same number as what your syslog source is sending to? any chance of any NAT in between?
+2.  is the protocol (UDP/TCP) the same for the listening syslog-ng container as what the syslog source is sending to?
+
+if you verify both of these, then it could be a networking issue. as this is a bit out of my hands and you are not troubleshooting your network, i have these recommendations:
+
+1. use tcpdump or similar packet sniffing tech to verify that the host on which the containers are running is seeing inbound traffic on the expected port and protocol from the source
+2. check if the host OS firewall on the S1 container host could be blocking traffic
+3. check if an intermediary network device could be blocking traffic
+4. check if the host OS firewall on 
+5. check if the syslog source is sending to an FQDN vs an IP and if DNS is working
+5. check if the syslog source has a network path to the IP of the S1 container host
+
