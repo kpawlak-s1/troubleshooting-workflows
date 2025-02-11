@@ -121,14 +121,15 @@ use curl to connect to the s1 console:
 
 curl -k https://xdr.us1.sentinelone.net
 
-
 if this fails, try to see if DNS is working:
 
 nslookup xdr.us1.sentinelone.com
 
 If its not DNS, then could be a connection issue of the HTTPS protocol. This could be that the outbound connection from the scalyr agent docker container is not able to connect to S1 via HTTPS. Check outbound traffic logs if avaiable to see if connections are coming off the host
 
-if they are not, then it could be that your host OS is blocking the connection. If not, check you edge firewall / other intermediaries to see if traffic is coming out.
+if they are not, then it could be that your host OS is blocking the connection. Check out the original article as it has some advice on commands to run for this
+
+If not, check you edge firewall / other intermediaries to see if traffic is coming out. 
 
 At this point we have gone through all the common scenarios for why you may not be getting logs from the agent at all. I would recommend 
 
@@ -146,10 +147,24 @@ Check you syslog.yaml config
 
 if you verify both of these, then it could be a networking issue. as this is a bit out of my hands and you are not troubleshooting your network, i have these recommendations:
 
-1. use tcpdump or similar packet sniffing tech to verify that the host on which the containers are running is seeing inbound traffic on the expected port and protocol from the source
-2. check if the host OS firewall on the S1 container host could be blocking traffic
-3. check if an intermediary network device could be blocking traffic
-4. check if the host OS firewall on 
-5. check if the syslog source is sending to an FQDN vs an IP and if DNS is working
-5. check if the syslog source has a network path to the IP of the S1 container host
+0. test if you can locally send syslog and get it to the S1 console
+
+on the same host running the s1 containers, run one of the commands under the "test listening ports" section of the original doc. for example:
+
+echo "<1>$(date '+%b %d %H:%M:%S') localhost test[$((RANDOM % 100))]: hello world" | nc -N -v 127.0.0.1 601
+
+if this works then syslog reception on the host works, so the issue is syslog delivering to the host
+
+1. test running it from another host in the same network. example command below, where my containers are running on the host at 192.168.1.21 and listening on port 514
+
+echo "<1>$(date '+%b %d %H:%M:%S') routerEdge test[$((RANDOM % 100))]: Test message from another linux host to syslog server" | nc -N -v 192.168.1.21 514
+
+if this works, then syslog delivery is working within the local network so likely the issue is some networking / intermediary issue between your source and the S1 host
+
+2. use tcpdump or similar packet sniffing tech to verify that the host on which the containers are running is seeing inbound traffic on the expected port and protocol from the source
+3. check if the host OS firewall on the S1 container host could be blocking traffic
+4. check if an intermediary network device could be blocking traffic
+5. check if the host OS firewall on 
+6. check if the syslog source is sending to an FQDN vs an IP and if DNS is working
+7. check if the syslog source has a network path to the IP of the S1 container host
 
