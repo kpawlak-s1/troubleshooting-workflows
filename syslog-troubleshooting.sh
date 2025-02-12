@@ -91,6 +91,25 @@ docker_scalyr_output=$(docker ps | grep scalyr-agent-docker-json)
 docker_syslog_output=$(docker ps | grep syslog-collector-syslog)
 docker_config_gen_output=$(docker ps | grep syslog-collector-config-generator)
 
+echo " "
+echo "in a moment, we will check the status of the expected containers. if they are not up, we will start them. If this fails you will get some info."
+echo "if this is successful, you will see docker start and the prompt you have open will no longer be available to run commands in"
+echo "hitting control-c or similar to exit closes the containers"
+echo "if this happens, you should check if you are now getting the expected logs in S1"
+echo "if you are not, then please open a new command prompt and we will run part two of the troubleshooting workflow"
+echo "this is available here: https://github.com/kpawlak-s1/troubleshooting-workflows/blob/main/syslog-troubleshooting-part2.sh"
+
+read -p "Do you want to advance to the next step? Type 'yes' to continue: " user_input
+
+# Check if the input is exactly 'yes'
+if [[ "$user_input" == "yes" ]]; then
+    echo "Proceeding to the next step..."
+else
+    echo "Exiting script. Approval not given."
+    exit 1  # Exit with error code 1
+fi
+
+
 #check status of scalyr agent container. if it is not up, tear down all containers and rerun docker compose. If it is still not up, point user towards logs
 if [[ $docker_scalyr_output == *"scalyr-agent-docker-json"* ]]; then
    echo "scalyr agent container is running"
@@ -144,7 +163,3 @@ fi
 
 
 
-# get container id of the scalyr agent container
-docker_scalyr_id=$(docker ps | grep scalyr-agent-docker-json | awk '{print $1}')
-
-docker exec -it $docker_scalyr_id
